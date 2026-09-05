@@ -1,0 +1,13 @@
+{
+  "name": "Black Card",
+  "short_name": "Black Card",
+  "description": "Турниры, профиль и рейтинг покерного клуба Black Card",
+  "start_url": "./app.html#/home",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0a0908",
+  "theme_color": "#0a0908",
+  "icons": [
+    { "src": "assets/logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
