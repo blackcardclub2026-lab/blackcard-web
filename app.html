@@ -227,7 +227,7 @@
 <script>
 /* ============ конфиг ============ */
 // [Предположение] заменить на реальный адрес backend после деплоя на Railway
-const API_BASE = window.BLACKCARD_API_BASE || "https://web-production-9c197.up.railway.app";
+const API_BASE = window.BLACKCARD_API_BASE || "https://blackcard-api.up.railway.app";
 
 /* ============ авторизация (email + пароль, отдельно от Telegram) ============ */
 function getToken() { try { return localStorage.getItem("bc_token") || ""; } catch(e) { return ""; } }
@@ -245,7 +245,7 @@ async function api(path, opts = {}) {
 }
 
 /* ============ роутер ============ */
-const PUBLIC_ROUTES = new Set(["/login", "/signup"]);
+const PUBLIC_ROUTES = new Set(["/login", "/signup", "/verify"]);
 const routes = {};
 function route(pattern, handler) { routes[pattern] = handler; }
 function navigate(hash) { location.hash = hash; }
@@ -482,6 +482,7 @@ route("/profile", async (stage) => {
     <div class="card" style="padding:0;">
       <a href="#/achievements" class="kv-row" style="padding:14px 16px;"><span class="k">Достижения</span><span class="v">→</span></a>
       <a href="#/rating" class="kv-row" style="padding:14px 16px;"><span class="k">Лидерборд</span><span class="v">→</span></a>
+      ${me.is_admin ? `<a href="#/admin" class="kv-row" style="padding:14px 16px;"><span class="k">Админ-панель</span><span class="v">→</span></a>` : ""}
     </div>
     <button class="btn ghost full" id="logout-btn" style="margin-top:16px;">Выйти</button>
   `;
@@ -524,6 +525,215 @@ route("/achievements", async (stage) => {
         </div>
       `).join("")}
     </div>
+  `;
+});
+
+// ==================== АДМИН-ПАНЕЛЬ ====================
+// Доступна только пользователям с is_admin=true (проверка на бэкенде;
+// на фронте просто скрываем ссылку из профиля для остальных).
+
+async function requireAdminGuard(stage) {
+  try {
+    const me = await api("/api/me");
+    if (!me.is_admin) {
+      stage.innerHTML = `<div class="empty-note">Доступ только для администраторов.</div>`;
+      return null;
+    }
+    return me;
+  } catch (e) {
+    stage.innerHTML = `<div class="empty-note">Ошибка: ${escapeHtml(e.message)}</div>`;
+    return null;
+  }
+}
+
+// ---- Список турниров (админ) ----
+route("/admin", async (stage) => {
+  if (!(await requireAdminGuard(stage))) return;
+  const [tournaments, clubs] = await Promise.all([
+    api("/api/admin/tournaments"),
+    api("/api/clubs"),
+  ]);
+
+  stage.innerHTML = `
+    ${topbar("Админ-панель", "/profile")}
+    <div class="tabs">
+      <a class="active" href="#/admin">Турниры</a>
+      <a href="#/admin/users">Пользователи</a>
+    </div>
+    <a class="btn full" href="#/admin/tournament/new" style="display:block; text-align:center; text-decoration:none; margin-bottom:16px;">+ Создать турнир</a>
+    ${tournaments.length ? tournaments.map(t => `
+      <div class="card" style="margin-bottom:12px;">
+        <div class="kv-row"><span class="k">${escapeHtml(t.title)}</span><span class="v">${formatDate(t.date)}, ${t.start_time}</span></div>
+        <div class="kv-row"><span class="k">Клуб</span><span class="v">${escapeHtml(t.club.name)}</span></div>
+        <div class="kv-row"><span class="k">Записано</span><span class="v">${t.registered}/${t.capacity}</span></div>
+        <div class="kv-row"><span class="k">Статус</span><span class="v">${escapeHtml(t.status)}</span></div>
+        <div style="display:flex; gap:8px; margin-top:12px;">
+          <a class="btn ghost" style="flex:1; text-align:center; text-decoration:none;" href="#/admin/tournament/${t.id}/edit">Редактировать</a>
+          <a class="btn ghost" style="flex:1; text-align:center; text-decoration:none;" href="#/admin/tournament/${t.id}/participants">Участники</a>
+        </div>
+        <button class="btn ghost full" style="margin-top:8px; color:var(--err); border-color:var(--err);" data-del="${t.id}">Удалить турнир</button>
+      </div>
+    `).join("") : `<div class="empty-note">Турниров пока нет.</div>`}
+  `;
+
+  stage.querySelectorAll("[data-del]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Удалить турнир? Все регистрации на него тоже удалятся.")) return;
+      try {
+        await api(`/api/admin/tournaments/${btn.dataset.del}`, { method: "DELETE" });
+        router();
+      } catch (e) { alert(e.message); }
+    });
+  });
+});
+
+function tournamentFormFields(t, clubs) {
+  t = t || {};
+  return `
+    <div class="reg-field">
+      <label>Клуб</label>
+      <select id="f-club" style="background:var(--panel); border:1px solid var(--hairline); border-radius:4px; padding:15px 14px; font-size:16px; color:var(--paper); width:100%;">
+        ${clubs.map(c => `<option value="${c.id}" ${t.club && t.club.id === c.id ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="reg-field"><label>Название</label><input type="text" id="f-title" value="${t.title ? escapeHtml(t.title) : ""}"></div>
+    <div class="reg-field"><label>Подзаголовок</label><input type="text" id="f-subtitle" value="${t.subtitle ? escapeHtml(t.subtitle) : ""}"></div>
+    <div class="reg-field"><label>Дата</label><input type="date" id="f-date" value="${t.date || ""}"></div>
+    <div class="reg-field"><label>Время начала (ЧЧ:ММ)</label><input type="text" id="f-start" placeholder="19:00" value="${t.start_time || ""}"></div>
+    <div class="reg-field"><label>Мест</label><input type="text" inputmode="numeric" id="f-capacity" value="${t.capacity ?? ""}"></div>
+    <div class="reg-field"><label>Стоимость входа (сум)</label><input type="text" inputmode="numeric" id="f-cost" value="${t.cost ?? 0}"></div>
+    <div class="reg-field"><label>Стартовый стек</label><input type="text" inputmode="numeric" id="f-stack" value="${t.starting_stack ?? 0}"></div>
+    <div class="reg-field"><label>Ребай (сум, необязательно)</label><input type="text" inputmode="numeric" id="f-rebuy" value="${t.rebuy_cost ?? ""}"></div>
+    <div class="reg-field"><label>Поздняя рег-я до (ЧЧ:ММ, необязательно)</label><input type="text" id="f-latereg" value="${t.late_reg_until || ""}"></div>
+    <div class="reg-field"><label>Описание</label><input type="text" id="f-desc" value="${t.description ? escapeHtml(t.description) : ""}"></div>
+    <div class="reg-field">
+      <label>Статус</label>
+      <select id="f-status" style="background:var(--panel); border:1px solid var(--hairline); border-radius:4px; padding:15px 14px; font-size:16px; color:var(--paper); width:100%;">
+        <option value="open" ${t.status === "open" || !t.status ? "selected" : ""}>open — открыт</option>
+        <option value="closed" ${t.status === "closed" ? "selected" : ""}>closed — регистрация закрыта</option>
+        <option value="finished" ${t.status === "finished" ? "selected" : ""}>finished — завершён</option>
+      </select>
+    </div>
+  `;
+}
+
+function readTournamentForm() {
+  const val = (id) => document.getElementById(id).value.trim();
+  return {
+    club_id: Number(val("f-club")),
+    title: val("f-title"),
+    subtitle: val("f-subtitle") || null,
+    date: val("f-date"),
+    start_time: val("f-start"),
+    capacity: Number(val("f-capacity")),
+    cost: Number(val("f-cost") || 0),
+    starting_stack: Number(val("f-stack") || 0),
+    rebuy_cost: val("f-rebuy") ? Number(val("f-rebuy")) : null,
+    late_reg_until: val("f-latereg") || null,
+    description: val("f-desc") || null,
+    status: val("f-status"),
+  };
+}
+
+// ---- Создание турнира ----
+route("/admin/tournament/new", async (stage) => {
+  if (!(await requireAdminGuard(stage))) return;
+  const clubs = await api("/api/clubs");
+  stage.innerHTML = `
+    ${topbar("Новый турнир", "/admin")}
+    ${tournamentFormFields(null, clubs)}
+    <button class="btn full" id="save-btn">Создать</button>
+  `;
+  document.getElementById("save-btn").addEventListener("click", async () => {
+    try {
+      await api("/api/admin/tournaments", { method: "POST", body: JSON.stringify(readTournamentForm()) });
+      navigate("#/admin");
+    } catch (e) { alert(e.message); }
+  });
+});
+
+// ---- Редактирование турнира ----
+route("/admin/tournament/:id/edit", async (stage, params) => {
+  if (!(await requireAdminGuard(stage))) return;
+  const [t, clubs] = await Promise.all([api(`/api/tournaments/${params.id}`), api("/api/clubs")]);
+  stage.innerHTML = `
+    ${topbar("Редактирование турнира", "/admin")}
+    ${tournamentFormFields(t, clubs)}
+    <button class="btn full" id="save-btn">Сохранить</button>
+  `;
+  document.getElementById("save-btn").addEventListener("click", async () => {
+    try {
+      await api(`/api/admin/tournaments/${params.id}`, { method: "PATCH", body: JSON.stringify(readTournamentForm()) });
+      navigate("#/admin");
+    } catch (e) { alert(e.message); }
+  });
+});
+
+// ---- Участники турнира + очки/результаты (админ) ----
+route("/admin/tournament/:id/participants", async (stage, params) => {
+  if (!(await requireAdminGuard(stage))) return;
+  const rows = await api(`/api/admin/tournaments/${params.id}/participants`);
+  stage.innerHTML = `
+    ${topbar("Участники и очки", "/admin")}
+    ${rows.length ? rows.map(p => `
+      <div class="card" style="margin-bottom:10px; display:flex; align-items:center; gap:10px;">
+        <div style="flex:1;">
+          <div style="font-weight:700;">${escapeHtml(p.nickname)}</div>
+          <div style="font-size:11.5px; color:var(--muted);">${escapeHtml(p.email)}</div>
+        </div>
+        <select data-status="${p.registration_id}" style="background:var(--panel-2); border:1px solid var(--hairline); border-radius:4px; padding:8px; color:var(--paper); font-size:12px;">
+          <option value="registered" ${p.status === "registered" ? "selected" : ""}>записан</option>
+          <option value="waitlist" ${p.status === "waitlist" ? "selected" : ""}>ожидание</option>
+          <option value="cancelled" ${p.status === "cancelled" ? "selected" : ""}>отменён</option>
+        </select>
+        <input type="text" inputmode="numeric" data-points="${p.registration_id}" value="${p.points}" style="width:60px; text-align:center; background:var(--panel-2); border:1px solid var(--hairline); border-radius:4px; padding:8px; color:var(--gold-bright); font-weight:700;">
+      </div>
+    `).join("") : `<div class="empty-note">Никто ещё не записался.</div>`}
+    ${rows.length ? `<button class="btn full" id="save-all-btn">Сохранить все изменения</button>` : ""}
+  `;
+
+  const saveBtn = document.getElementById("save-all-btn");
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.disabled = true;
+      try {
+        for (const p of rows) {
+          const points = Number(stage.querySelector(`[data-points="${p.registration_id}"]`).value || 0);
+          const status = stage.querySelector(`[data-status="${p.registration_id}"]`).value;
+          await api(`/api/admin/registrations/${p.registration_id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ points, status }),
+          });
+        }
+        alert("Сохранено");
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+  }
+});
+
+// ---- Список зарегистрированных пользователей (админ) ----
+route("/admin/users", async (stage) => {
+  if (!(await requireAdminGuard(stage))) return;
+  const users = await api("/api/admin/users");
+  stage.innerHTML = `
+    ${topbar("Пользователи", "/profile")}
+    <div class="tabs">
+      <a href="#/admin">Турниры</a>
+      <a class="active" href="#/admin/users">Пользователи</a>
+    </div>
+    <div class="section-label">Всего: ${users.length}</div>
+    ${users.map(u => `
+      <div class="card" style="margin-bottom:10px;">
+        <div class="kv-row"><span class="k">${escapeHtml(u.nickname)}</span><span class="v">${u.is_admin ? "👑 админ" : (u.is_verified ? "подтверждён" : "не подтверждён")}</span></div>
+        <div class="kv-row"><span class="k">Email</span><span class="v">${escapeHtml(u.email)}</span></div>
+        ${u.phone ? `<div class="kv-row"><span class="k">Телефон</span><span class="v">${escapeHtml(u.phone)}</span></div>` : ""}
+        <div class="kv-row"><span class="k">Регистрация</span><span class="v">${new Date(u.created_at).toLocaleDateString("ru-RU")}</span></div>
+      </div>
+    `).join("")}
   `;
 });
 
@@ -639,25 +849,77 @@ route("/signup", async (stage) => {
     if (!consentCheck.checked) { consentField.classList.add("invalid"); ok = false; } else consentField.classList.remove("invalid");
     if (!ok) return;
 
+    const email = emailInput.value.trim();
     const btn = document.getElementById("reg-submit");
     btn.disabled = true;
     try {
-      const r = await api("/api/auth/register", {
+      await api("/api/auth/register", {
         method: "POST",
         body: JSON.stringify({
           nickname: nameInput.value.trim(),
-          email: emailInput.value.trim(),
+          email: email,
           password: passwordInput.value,
           consent_rules: true,
         }),
       });
-      setToken(r.token);
-      document.getElementById("reg-form-wrap").style.display = "none";
-      document.getElementById("reg-success").style.display = "block";
-      setTimeout(() => navigate("#/home"), 900);
+      navigate("#/verify?email=" + encodeURIComponent(email));
     } catch (e) {
       alert(e.message);
       btn.disabled = false;
+    }
+  });
+});
+
+// ---- Подтверждение email кодом ----
+route("/verify", async (stage, params, query) => {
+  const email = query.email || "";
+  stage.innerHTML = `
+    <div style="display:flex; flex-direction:column; align-items:center; padding:32px 0 24px;">
+      <img src="assets/logo.png" alt="" style="width:150px; max-width:60%;">
+    </div>
+    <h1 class="page-title" style="text-align:center;">Подтверждение email</h1>
+    <p style="text-align:center; color:var(--muted); font-size:14px; margin:-10px 0 24px;">
+      Мы отправили 6-значный код на ${escapeHtml(email)}. Введите его ниже.
+    </p>
+
+    <div class="reg-field" id="code-field">
+      <label for="verify-code">Код из письма</label>
+      <input type="text" id="verify-code" placeholder="000000" inputmode="numeric" maxlength="6" autocomplete="one-time-code" style="letter-spacing:0.3em; text-align:center; font-size:20px;">
+      <div class="hint">Введите 6-значный код</div>
+    </div>
+
+    <button class="btn full" id="verify-submit">Подтвердить</button>
+    <p style="text-align:center; font-size:13px; color:var(--muted); margin-top:18px;">
+      Не пришло письмо? <a href="#" id="resend-link" style="color:var(--gold-bright); text-decoration:underline;">Отправить код ещё раз</a>
+    </p>
+  `;
+
+  document.getElementById("verify-submit").addEventListener("click", async () => {
+    const codeField = document.getElementById("code-field");
+    const codeInput = document.getElementById("verify-code");
+    const code = codeInput.value.trim();
+    if (!/^\d{6}$/.test(code)) { codeField.classList.add("invalid"); return; }
+    codeField.classList.remove("invalid");
+
+    const btn = document.getElementById("verify-submit");
+    btn.disabled = true;
+    try {
+      const r = await api("/api/auth/verify-email", { method: "POST", body: JSON.stringify({ email, code }) });
+      setToken(r.token);
+      navigate("#/home");
+    } catch (e) {
+      alert(e.message);
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById("resend-link").addEventListener("click", async (e) => {
+    e.preventDefault();
+    try {
+      await api("/api/auth/resend-code", { method: "POST", body: JSON.stringify({ email }) });
+      alert("Код отправлен повторно.");
+    } catch (err) {
+      alert(err.message);
     }
   });
 });
