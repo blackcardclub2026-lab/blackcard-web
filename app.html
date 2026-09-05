@@ -227,7 +227,7 @@
 <script>
 /* ============ конфиг ============ */
 // [Предположение] заменить на реальный адрес backend после деплоя на Railway
-const API_BASE = window.BLACKCARD_API_BASE || "https://blackcard-api.up.railway.app";
+const API_BASE = window.BLACKCARD_API_BASE || "https://web-production-9c197.up.railway.app";
 
 /* ============ авторизация (email + пароль, отдельно от Telegram) ============ */
 function getToken() { try { return localStorage.getItem("bc_token") || ""; } catch(e) { return ""; } }
