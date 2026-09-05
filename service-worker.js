@@ -2,7 +2,13 @@
 // устанавливаемым (PWA) и открывался офлайн со старой версией оболочки.
 // Данные (турниры, профиль) всегда идут в сеть, кешируется только сама
 // оболочка приложения.
-const CACHE = "blackcard-shell-v1";
+//
+// ВАЖНО: при каждом изменении app.html (или другого файла из SHELL_FILES)
+// нужно поднимать номер версии ниже (v2 -> v3 -> ...). Браузер обновляет
+// service worker, только если содержимое этого файла изменилось хотя бы на
+// байт — иначе он продолжает работать со старым кэшем бесконечно, даже
+// после нового деплоя на Netlify.
+const CACHE = "blackcard-shell-v2";
 const SHELL_FILES = ["./app.html", "./manifest.webmanifest", "./assets/logo.png", "./assets/background.jpg"];
 
 self.addEventListener("install", (event) => {
@@ -20,7 +26,16 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== location.origin) return; // не трогаем запросы к API
+
+  // Сеть сначала (чтобы всегда получать актуальную версию оболочки после
+  // деплоя), кеш — только запасной вариант, если сети нет (офлайн).
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(event.request)
+      .then((response) => {
+        const copy = response.clone();
+        caches.open(CACHE).then((cache) => cache.put(event.request, copy));
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
